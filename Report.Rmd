@@ -1,0 +1,451 @@
+---
+title: "Retail Transactions:  Monthly Report"
+author: "Chrystalla Kofterou, ck2981"
+output: html_document
+
+  
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+
+```
+
+```{r seed}
+set.seed(41)
+```
+
+```{r libraries}
+#install.packages("data.table")
+#install.packages("DT")
+#install.packages("Hmisc")
+library(data.table)
+library(DT)
+library(ggplot2)
+library(tidyverse)
+library(lubridate)
+library(plyr)
+library(rmarkdown)
+library(Hmisc)
+```
+
+```{r constants}
+dat = fread(input = params$dat, colClasses = c(time = 'Date') )
+
+views = fread(input = params$views, colClasses = c(time = 'Date') ) #motnhly views Change according to new months with variables below
+
+```
+
+```{r functions, results = "hide"}
+round.numerics <- function(x, digits){
+  if(is.numeric(x)){
+    x <- round(x = x, digits = digits)
+  }
+  return(x)
+}
+```
+
+```{r load_data}
+
+#Product and customer specific data
+customers <- fread(input = 'customers.csv')
+products = fread(input = 'products.csv')
+
+
+```
+
+
+
+
+```{r explore_data, eval = FALSE}
+#monthly transactions table data exploration
+dim(dat)
+glimpse(dat)
+names(dat) #5 attributes (customer_id, product_id, price, quantity, time)
+summary(dat)
+str(dat)
+
+#customer table data exploration
+dim(customers)
+glimpse(customers)
+names(customers) #5 attributes (customer_id, age, gender, income, region)
+summary(customers)
+str(customers)
+
+#monthly views table data exploration
+dim(views)
+glimpse(views)
+names(views) #3 attributes (customer_id, product_id, price)
+summary(views)
+str(views)
+
+#mproduct table data exploration
+dim(products)
+glimpse(products)
+names(products) #3 attributes (category, product_id, price)
+summary(products)
+str(products)
+
+
+```
+
+
+```{r clean_data}
+sum(is.na(dat)) #missing values in dat
+sum(duplicated(dat)) #duplicated rows in dat
+
+
+sum(is.na(views)) #missing values 
+sum(duplicated(views)) #duplicated rows. Number is big because the time stamp has been removed from the time column indicating that mulitple views of a specific product by one custmer on the same day
+
+sum(is.na(customers)) #missing values 
+sum(duplicated(customers)) #duplicated rows 
+
+sum(is.na(products)) #missing values 
+sum(duplicated(products)) #duplicated rows 
+
+
+
+
+```
+
+```{r merged_tables}
+
+custo_complete = as.data.table(merge(dat, customers,by="customer_id")) #merge monthly transactions with customer information to connect customer demographics with individual transactions. This table shows products purchased by each customer, along with the purchase date and custoner age, genfer, income and region
+
+cust_views = merge(views, customers, by = "customer_id") #merge custromer mothly views with customer demographics. Specifically, it shows when a customer viewed a specific product along with the customer's age, gender, income and region 
+
+prod_transactions = as.data.table(merge(dat, products,by="product_id")) #merge monthly transactions with product category. This table can helo derive the most popular #product, product category etc. It is essential for revenue calculations and stock reports. 
+
+prod_views = as.data.table(merge(views, products,by="product_id")) #merge monthly views with product information to connect product categories with monthly views. Using #this table with further analysis, we can derive which products tend to have the highest conversion rates (from views to purchase) and more. 
+
+
+```
+
+
+
+## Part 1:  Summary {.tabset}
+
+This part of the report will be directed to your internal team at the consulting company.  It is intended to document the sources of information that were used in the project.  It will also describe the data in less technical terms to team members who are not data scientists.  If another member of the team joins the project later, they will rely on your descriptions to gain familiarity with the data.  To that end, we recommend providing some instructions that will help other consultants use the information more effectively.
+
+### Customers
+
+The client has `r num_customers` in total with a mean age of `r mean_age` years old. The customers are almost evenly divided between each gender with `r percentage_gender` being male. They have a high range of different incomes and live in `r num_region` different regions. 
+
+
+```{r customers}
+
+describe(customers)
+
+num_customers = customers[, .N,]
+mean_age = customers[, mean(age),]
+percentage_gender = customers[, mean(gender == 'M')]
+num_region = customers[, length(unique(region))]
+
+
+```
+
+
+### Products
+
+The client is offering `r num_products` products distributed among `r num_categories` different categories. This table shows the 'product_id' of each product along with its category and price. 
+
+```{r products}
+
+describe(products)
+
+num_products = products[,.N,]
+num_categories = products[, length(unique(category))]
+
+```
+
+
+### Views
+
+The monthly views table provided by the client has a new row for each item a customer viewed along with the date viewed. The following statistical summary shows some important metrics regarding the data we have on hand. The three attributes are 'customer_id', 'product_id' and 'time' which indicates the date a customer viewed the product. There were `r total_views_all` in total during the month by `r unique_views_cust` different customers. 
+
+```{r views}
+
+describe(views)
+unique_views_cust= views[, length(unique(customer_id))]
+unique_views_prod = views[, length(unique(product_id))]
+total_views_all = views[,.N,]
+```
+
+
+### Transactions
+
+##The monthly transactions table provided by the client allocates a row for each different item a customer purchases. While the data on hand is important, it is not useful to look at repetitive rows for each item. In general, `r unique_transactions_cust` different customers made a purchase during the month, resulting in `r month_revenue` dollars in revenue. 
+
+```{r transactions}
+
+describe(dat)
+unique_transactions_cust = dat[, length(unique(customer_id)), ]
+unique_products = dat[, length(unique(product_id))]
+month_revenue = dat[, sum(price*quantity),]
+```
+
+
+## Part 2:  Specific Questions {.tabset}
+
+This part of the report will be directed to product managers throughout the client's company.  The idea is to give them the useful information they need to act on the specific questions they posed.  Plan your communication accordingly.
+
+### Q1
+
+#### Question
+
+During the first week of the month, what were the 10 most viewed products?  Show the results in a table with the product's identifier, category, and count of the number of views.
+
+#### Answer
+
+```{r part2_q1}
+
+x = prod_views[time>=params$weekly.report.first.day & time <= params$weekly.report.last.day, .('total_views' = .N), product_id] #filter, select and group for top 10 products. Using constant variables to allow
+# for reproducible results depending on the desired period of the client
+
+setorderv(x = x, cols = c("total_views"), order = c(-1)) #order to reveal top 10 views
+
+top_ten_views = cbind(x, 'category' = prod_views$category) #add the product category
+
+top_ten_views[1:10] #retrieve only the 10 top product views
+```
+
+### Q2
+
+#### Question
+
+During the whole month, what were the 10 most viewed products for each category?  Show the results in separate tables by category.  Including only the product's identifier and the count of the number of views.
+
+
+#### Answer {.tabset}
+
+```{r part2_q2_overall_calculations}
+#use same variables as above to eliminate confusion
+
+top_views_month = prod_views[,.('total_views' = .N), category]
+```
+
+##### Shirt
+
+```{r part2_q2_shirt}
+
+Shirt_views = prod_views[category == 'shirt',.('total_views' = .N), product_id]
+
+
+setorderv(x = Shirt_views, cols = c("total_views"), order = c(-1))
+
+Shirt_views[1:10]
+```
+
+##### Pants
+
+```{r part2_q2_pants}
+
+Pants_views = prod_views[category == 'pants',.('total_views' = .N), product_id]
+
+
+setorderv(x = Pants_views, cols = c("total_views"), order = c(-1))
+
+Pants_views[1:10]
+
+```
+
+##### Coat
+
+```{r part2_q2_coat}
+
+Coat_views = prod_views[category == 'coat',.('total_views' = .N), product_id]
+
+
+setorderv(x = Coat_views, cols = c("total_views"), order = c(-1))
+
+Coat_views[1:10]
+
+```
+
+##### Shoes
+
+```{r part2_q2_shoes}
+
+Shoes_views = prod_views[category == 'shoes',.('total_views' = .N), product_id]
+
+
+setorderv(x = Shoes_views, cols = c("total_views"), order = c(-1))
+
+Shoes_views[1:10]
+
+```
+
+##### Hat
+
+```{r part2_q2_hat}
+
+Hat_views = prod_views[category == 'hat',.('total_views' = .N), product_id]
+
+setorderv(x = Hat_views, cols = c("total_views"), order = c(-1))
+
+Hat_views[1:10]
+
+
+```
+
+
+### Q3
+
+#### Question
+
+What was the total revenue for each category of product during the month?  Show the results in a single table sorted in decreasing order.
+
+#### Answer
+
+```{r part2_q3}
+
+sales = merge(custo_complete, products, by = 'product_id' )
+
+Total_revenue = sales[,.('total_revenue' = sum(price.x*quantity) ), category]
+
+setorderv(x = Total_revenue, cols = c("total_revenue"), order = c(-1))
+
+Total_revenue
+
+
+```
+
+### Q4
+
+#### Question
+
+Among customers with at least one transaction, show the average, median, and standard deviation of the customers' monthly spending on the site.
+
+#### Answer
+
+```{r part2_q4}
+
+
+cust_transactions = custo_complete[,.(quantity, price, 'total_transactions' = .N), customer_id ]
+
+cust_transactions[total_transactions >= 1, .('mean_revenue' = mean(rep(price, quantity)),'median_revenue' = median(rep(price, quantity)), 'standard_deviation' = sd(rep(price, quantity))), ]
+
+
+```
+
+### Q5
+
+#### Question
+
+What is the percentage distribution of spending by gender?  Show the amount of revenue and the percentage.
+
+#### Answer
+
+```{r part2_q5}
+
+custo_complete[, .('pct_female' = mean(gender == "F"), 'pct_male' = mean(gender == "M"), 'gender_revenue' = sum(price*quantity))]
+                                                                                                                
+```
+
+### Q6
+
+#### Question
+
+Using linear regression, what is the effect of an extra ten thousand dollars of income on monthly spending for a customer while adjusting for age, gender, and region?
+
+#### Answer
+
+```{r part2_q6}
+
+reg_income = 10000 #input income value to evaluate its effect on spending if income were to increase by this value
+
+cust_spending = custo_complete[, .(income, age, gender, region, 'spending' = sum(price*quantity)), customer_id] #calculate spending per customer
+
+reg_spending = lm(formula = spending ~ income + age + gender + region, data = cust_spending)
+
+income_spending_effect = reg_spending$coefficients[1]+reg_spending$coefficients[2]*reg_income
+income_spending_effect #spending increases by 1027.979 with a $10,000 increase in income for January
+
+
+```
+
+
+### Q7
+
+#### Question
+
+Among customers who viewed at least 1 product, how many had at least one purchase during the month?  Show the total number and as a percentage of the users with a view.
+
+#### Answer
+
+```{r part2_q7}
+
+
+
+cust_prod_views = views[, .("total_views" = .N, "products_viewed" = length(unique(product_id))), customer_id][products_viewed >= 1,,] #calcualte total views per customer and select only those with at least one view
+
+cust_pruchases = custo_complete[,.('total_transactions' = .N), customer_id ][total_transactions >=1,,] #calcualte total transactions per customer and select only those with at least one transaction
+
+
+cust_prod_views[, purchased := FALSE][cust_pruchases, purchased := TRUE, on = .(customer_id)] #create a new column to evaluate which customers had a purchase after viewing products
+
+cust_prod_views[, .("total_purhases" = length(purchased[purchased == "TRUE"]), "pct_purchased" = mean(purchased == "TRUE")),] #35,327 customers purchased after viewing at least 1 product. Approximately 52.45% of total users with a view
+
+```
+
+### Q8
+
+#### Question
+
+Now let's look at the viewing habits in different age groups, including 18-34, 35-49, 50-64, and 65+.  Within each group, what were the mean, median, and standard deviation for the number of unique products viewed per customer?
+
+#### Answer
+
+```{r part2_q8}
+
+breaks = c(18,35,50,65,400)
+labels = c("18-34", "35-49", "50-64", "65+")
+
+cust_views_byage = cust_views[, agegroups := cut(age, breaks = breaks, right = FALSE, labels = labels)][,.(customer_id, "unique_views" = length(unique(product_id)), agegroups),customer_id ][,.('mean_products' = mean(unique_views),'median_products' = median(unique_views), 'standard_deviation' = sd(unique_views)), agegroups]
+
+cust_views_byage
+
+
+
+```
+
+
+### Q9 
+
+#### Question
+
+What is the correlation between a user's total page views and total spending?  For customers without a transaction, include their spending as zero.
+
+#### Answer
+
+```{r part2_q9}
+
+tot_views = views[, .("total_views" = .N), customer_id]
+tot_spend = dat[, .("total_spending" = sum(price*quantity), "total_transactions" = .N), keyby = customer_id][, .(customer_id, total_spending, total_transactions = ifelse(total_transactions <= 0, total_spending == 0, total_transactions))]
+
+dt_corr = merge(tot_spend, tot_views, by = "customer_id")
+
+cor(dt_corr$total_spending, dt_corr$total_views) #looking at the bigger picture for correlation between total spending and total views
+
+
+```
+
+### Q10
+
+#### Question
+
+Which customer purchased the largest number of coats?  In the event of a tie, include all of the users who reached this value.  Show their identifiers and total volume.
+
+#### Answer
+
+```{r part2_q10}
+
+coat_transactions = prod_transactions[category == "coat", .("total_purchased" = .N), customer_id]
+
+coat_transactions[coat_transactions[, .I[which.max(total_purchased)],by=customer_id]$V1][total_purchased == max(total_purchased), .(customer_id, total_purchased),]
+
+
+
+```
+
